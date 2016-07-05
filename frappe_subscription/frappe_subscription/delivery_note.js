@@ -1,10 +1,15 @@
 cur_frm.cscript.get_packing_details = function(doc,cdt,cdn){
     if(is_doc_saved()){
+        if(doc.pack_manualy==1){
+            doc.pack_manualy = 0
+            refresh_field('pack_manualy')
+        }
         frappe.throw("Please first save the Delivery Note");
+    }
     // if(doc.name.indexOf("New Delivery Note") > -1)
     //     frappe.throw("Please first save the Delivery Note");
-    }else{
-        if(doc.dn_status == "Draft" || doc.dn_status == "Partialy Packed"){
+    else{
+        if(doc.dn_status == "Draft" || doc.dn_status == "Partialy Packed" || doc.dn_status == "Manual Partialy Packed" || doc.dn_status == "Manual Packing Slips Created"){
             confirm_msg = "<center>Do you really want to create the Packing Slips<br>\
                             Once Packing Slip Created you can not make changes in Delivery Note</center>"
 
@@ -18,7 +23,12 @@ cur_frm.cscript.get_packing_details = function(doc,cdt,cdn){
                         delivery_note:doc,
                     },
                     callback: function(r){
-                        if(!r.exc) {
+                        // if(!r.exc)
+                        if(r.message) {
+                            if(r.message.pack_manualy == 0){
+                                cur_frm.set_df_property("pack_manualy","read_only", 0)
+                                refresh_field('pack_manualy')
+                            }
                             cur_frm.reload_doc();
                             if(r.message.status == "Packing Slips Created")
                                 frappe.msgprint("Packing Slip Created");
@@ -26,7 +36,8 @@ cur_frm.cscript.get_packing_details = function(doc,cdt,cdn){
                     },
                 });
             });
-        }else{
+        }
+        else{
             frappe.throw("Packing Slips are already created. Please Reload the Document")
         }
     }
@@ -38,9 +49,9 @@ cur_frm.cscript.fetch_ups_ground_rates = function(doc, cdt, cdn){
         frappe.throw("Please uncheck the Manual Shipping Option");
     }else if(is_doc_saved()){
         frappe.throw("Please first save the Delivery Note");
-    }else if(doc.dn_status == "Draft"){
+    else if(doc.dn_status == "Draft")
         frappe.throw("Bin Packing Information not found ...");
-    }else{
+    else{
         get_rates(doc, true, "Fetching UPS Ground Rate");
     }
 }
@@ -51,11 +62,12 @@ cur_frm.cscript.get_ups_rates = function(doc,cdt,cdn){
         frappe.throw("Please uncheck the Manual Shipping Option");
     }else if(is_doc_saved()){
         frappe.throw("Please first save the Delivery Note");
-    }else if(doc.dn_status == "Draft"){
+    else if(doc.dn_status == "Draft")
         frappe.throw("Bin Packing Information not found ...");
-    }else if(doc.dn_status == "Shipping Labels Created"){
+    else if(doc.dn_status == "Shipping Labels Created"){
         frappe.throw("Shipping Labels are already Created ...");
-    }else{
+    }
+    else{
         if(doc.ups_rates && doc.ups_rates != "{}"){
             new frappe.UPSShippingRates(JSON.parse(doc.ups_rates));
         }else{
@@ -88,14 +100,339 @@ get_rates = function(doc, is_ground, freeze_message){
     })
 }
 
+// confirm_manual pack
+cur_frm.cscript.pack_manualy = function(doc,cdt,cdn){
+    if(doc.__islocal){
+        cur_frm.save()
+//        doc.pack_manualy = 0
+//        refresh_field('pack_manualy')
+//        frappe.throw("Please first save Delivery Note...");
+    }
+    else{
+        if(doc.status == "Draft" && (doc.dn_status=="Draft" || doc.dn_status == "Packing Slips Created" || doc.dn_status == "Manual Partialy Packed")){
+                // if(doc.status == "Draft" && (doc.dn_status == "Draft" || doc.dn_status == "Partialy Packed")){
+            confirm_msg = "<center>Do you really want to remove created Packing Slip, If exist ? </br>\
+                            And create packing slips for unique box items ?</center>"
+
+            frappe.confirm(confirm_msg,function(){
+                return frappe.call({
+                    freeze: true,
+                    freeze_message:"Removing created Packing Slip...",
+                    method: "frappe_subscription.frappe_subscription.manual_packing.pack_manualy",
+                    args:{
+                        delivery_note:doc,
+                    },
+                    callback: function(r){
+                        if(r.message){
+                            if (r.message.dn_status == "Draft" && doc.pack_manualy == 1){
+                                cur_frm.set_df_property("pack_manualy","read_only", 1)
+                                refresh_field('pack_manualy')
+                            }
+                            cur_frm.reload_doc();
+                        }
+                    }
+                });
+            }, function(){
+                doc.pack_manualy = 0
+                refresh_field('pack_manualy')
+            });
+        }
+        // else{
+        //     frappe.throw("Please get Packing Details first before create Manual Packing")
+        // }
+    }
+}
+
+// manual packing
+cur_frm.cscript.manual_packing = function(doc,cdt,cdn){
+    if(is_doc_saved())
+      // Just want to save doc here, assume user is clicking button for a reason
+      //frappe.throw("Please first save Delivery Note..");
+      cur_frm.save();
+    else{
+      if (doc.pack_manualy == 1){
+        if(doc.status == "Draft" && (doc.dn_status == "Draft" || doc.dn_status == "Packing Slips Created" || doc.dn_status == "Manual Partialy Packed")){
+          confirm_msg = "<center>Do you really want to create Manual Packing Slip ?</center>"
+          frappe.confirm(confirm_msg, function(){
+            return frappe.call({
+              freeze: true,
+              freeze_message:"Manual Packing Creation...",
+              method: "frappe_subscription.frappe_subscription.manual_packing.manual_packing_creation",
+              args:{
+                delivery_note:doc,
+              },
+              callback: function(r){
+                if(r.message){
+                  var di = new frappe.ui.Dialog({
+                    title: __("Manual Packing Details"),
+                    fields: [
+                      {"fieldtype": "Link", "label": __("Box"), "fieldname": "box", "width": "40px;"},
+                      {"fieldtype": "Column Break", "fieldname": "cb"},
+                      {"fieldtype": "Data", "label": __("Weight"), "fieldname": "weight"},
+                      {"fieldtype": "Column Break", "fieldname": "cb1"},
+                      {"fieldtype": "Data", "label": __("Total Items"), "fieldname": "tot_items"},
+                      {"fieldtype": "Column Break", "fieldname": "cb2"},
+                      {"fieldtype": "Data", "label": __("Total Weight"), "fieldname": "tot_wt"},
+                      {"fieldtype": "Section Break", "fieldname": "cb3"},
+                      {"fieldtype":"HTML", "label":__("Manual Packing"), "reqd":1, "fieldname":"manual_pack"},
+                      {"fieldtype": "Button", "label": __("Pack Items"), "fieldname": "pack_items"},
+                    ]
+                  })
+                  $(di.body).find("[data-fieldname='manual_pack']").html(frappe.render_template("manual_packing", {"data":r.message[0]}))
+
+                  di.show();
+                  $(di.body).find("[data-fieldname='box']").autocomplete({source: r.message[1]})
+                  $(di.body).find("[data-fieldname='manual_pack']").css({"width": "560px", "height":"220px", "overflow": "scroll"})
+                  // set default selected qty as qty
+                  $.each(r.message[0], function(i, val) {
+                    $(di.body).find('input[name="select_qty"]').val(1)
+                  })
+                  format_fields(di);
+                  search_boxes(di);
+                  select_items(di);
+                  select_all_items(di);
+                  change_qty(di);
+                  cur_frm.refresh_fields();
+                  pack_items_manually(di,doc,r);
+                  // $('.hidden-xs').on("click", function(){
+                  //     if($('.check_row').find("input[name=check]:checked").length != 0){
+                  //         $('.check_row input:checkbox').prop('checked',false);
+                  //     }
+                  // })
+                }
+              }
+            });
+          });
+        }
+        else if(doc.status == "Draft" && doc.dn_status == "Manual Packing Slips Created"){
+          frappe.throw("Manual Packing Slips are already created. Please Reload the Document")
+        }
+        // else{
+        //     frappe.throw("Please get Packing Details first before create Manual Packing")
+        // }
+      }
+      // Pack manually checkbox is false
+      else{
+        frappe.throw("Please first remove created packing slip by confirming Pack manually")
+      }
+  }
+}
+
+// Pack Items Manually
+pack_items_manually = function(di,doc,r){
+    $(di.body).find("button[data-fieldname='pack_items']").on("click", function(){
+        var chk_items = $(cur_dialog.body).find("input[name=check]:checked").closest('tr')
+        if (chk_items.length > 0){
+            if($(cur_dialog.body).find('.t_row').length == chk_items.length){
+                qty_count = 0
+                $.each(chk_items, function(i, row) {
+                    qty = $(row).find('td:eq(3)').html()
+                    qty = qty.trim();
+                    sel_qty = $(row).find('#select_qty').val()
+                    if(qty == sel_qty){
+                        qty_count = qty_count + 1
+                    }
+                })
+                if (qty_count == $(cur_dialog.body).find('.t_row').length){
+                    dn_status = "Manual Packing Slips Created"
+                }
+                else{
+                    dn_status = "Manual Partialy Packed"
+                }
+                create_packing_slip_for_manual(di, doc, dn_status, chk_items, r)
+            }
+            else{
+                dn_status = "Manual Partialy Packed"
+                create_packing_slip_for_manual(di, doc, dn_status, chk_items, r)
+            }
+        }
+        else{
+            frappe.throw("Please first select items for Manual Packing...")
+        }
+    })
+}
+
+// create packing slip for manual packing
+create_packing_slip_for_manual = function(di, doc, dn_status, chk_items, r){
+    var me = this;
+    pack_items = []
+    $.each(chk_items, function(i, row) {
+        var item_row = row
+        pack_item = $(row).find('td:eq(1)').html()
+        pack_item = pack_item.trim();
+        c_uom = $(row).find('td:eq(2)').html()
+        c_uom = c_uom.trim();
+        sel_qty = $(row).find('#select_qty').val()
+        i = {"item_code": pack_item}
+        uom = {"uom": c_uom}
+        qty = {"qty": sel_qty}
+        $.extend(i, uom);
+        $.extend(i, qty);
+        pack_items.push(i);
+    })
+    // get current values on dialog box
+    box_item = $(cur_dialog.body).find("input[data-fieldname='box']").val()
+    box_wt = $(cur_dialog.body).find("input[data-fieldname='weight']").val()
+    total_wt = $(cur_dialog.body).find("input[data-fieldname='tot_wt']").val()
+
+    // Validation on selected Qty
+    $.each(r.message[0], function(i, row) {
+        $.each(pack_items, function(j, item_row) {
+            if (row.item_code == item_row.item_code){
+                if(row.custom_qty < item_row.qty){
+                    frappe.throw("Selected Qty should not be greater than Actual Qty of Item...")
+                }
+            }
+        })
+    })
+
+    if(Math.floor(box_wt) >= Math.floor(total_wt)){
+        frappe.call({
+            freeze: true,
+            freeze_message:"Manual Packing Slip Creation ...",
+            method:"frappe_subscription.frappe_subscription.manual_packing.create_packing_slip_for_manual",
+            args:{
+                "delivery_note":doc,
+                "dn_status": dn_status,
+                "pack_items": pack_items,
+                "box_item": box_item,
+                "box_wt": box_wt
+            },
+            callback: function(r) {
+                if(r.message){
+                    refresh_field('packing_slip_details')
+                    // if($('.check_row').find("input[name=check]:checked").length != 0){
+                    //     $('.check_row input:checkbox').prop('checked',false);
+                    // }
+                    di.hide()
+                    cur_frm.reload_doc();
+                    if(r.message.dn_status == "Manual Partialy Packed" || r.message.dn_status == "Manual Packing Slips Created"){
+                        frappe.msgprint("Manual Packing Slip Created..");
+                    }
+                }
+            }
+        });
+    }
+    else{
+        frappe.throw("Box Weight should be greater then Total Weight of packing items..")
+    }
+}
+
+// listuot box items
+search_boxes = function(di){
+    $(di.body).find("input[data-fieldname='box']").on("change", function(){
+        box_item = $(di.body).find("input[data-fieldname='box']").val()
+        if(box_item) {
+            frappe.call({
+                method:"frappe_subscription.frappe_subscription.manual_packing.get_box_item_wt",
+                args:{
+                    "box_item": box_item
+                },
+                callback: function(r) {
+                    if(r.message){
+                        $(di.body).find("[data-fieldname='weight']").val(r.message[0]['weight'])
+                    }
+                }
+            });
+        }
+        else
+            $(di.body).find("[data-fieldname='weight']").val(0)
+    })
+}
+
+// calculate total wt and items on selected qty change
+change_qty = function(di){
+    $('.select_qty').on("change", function(){
+        calculate_weight(di)
+     })
+
+}
+
+// select all items
+select_all_items = function(di){
+    $('.check1').on("click", function(){
+        // if($('.select_all').find("input[name=check1]:checked").length != 0){
+        if($(cur_dialog.body).find("input[name=check1]:checked").length != 0){
+            $('.check_row input:checkbox').prop('checked',true);
+        }
+        else{
+            $('.check_row input:checkbox').prop('checked',false);
+            $('.select_all input:checkbox').prop('checked',false);
+            $(di.body).find("[data-fieldname='tot_items']").val(0)
+            $(di.body).find("[data-fieldname='tot_wt']").val(0)
+        }
+        calculate_weight(di)
+    })
+}
+
+// calculate total wt and items on selected items
+select_items = function(di){
+    var items = []
+    $('.check_row').on("click", function(){
+        calculate_weight(di)
+        // if($('.check_row').find("input[name=check]:checked").length == 0){
+        if($(cur_dialog.body).find("input[name=check]:checked").length == 0){
+            $(di.body).find("[data-fieldname='tot_items']").val(0)
+            $(di.body).find("[data-fieldname='tot_wt']").val(0)
+        }
+    })
+}
+
+// actueal calculation on item selection and selected qty change
+calculate_weight = function(di){
+    var tot_wt = 0
+    var tot_qty = 0
+    // var item = $('.check_row').find("input[name=check]:checked").closest('tr')
+    var item = $(cur_dialog.body).find("input[name=check]:checked").closest('tr')
+    $.each(item, function(i, row) {
+        i_code = $(row).find('td:eq(1)').html()
+        sel_qty = $(row).find('#select_qty').val()
+        if (sel_qty > 0 ){
+            frappe.call({
+                method:"frappe_subscription.frappe_subscription.manual_packing.calculate_total_weight",
+                args:{
+                    "item": i_code,
+                    "select_qty": sel_qty
+                },
+                callback: function(r) {
+                    if(r.message){
+                        wt = r.message[1] * r.message[0]['weight']
+                        tot_wt = tot_wt + wt
+                        qty = r.message[1] * 1
+                        tot_qty = tot_qty + qty
+                    }
+                    $(di.body).find("input[data-fieldname='tot_items']").val(tot_qty)
+                    $(di.body).find("input[data-fieldname='tot_wt']").val(tot_wt)
+                }
+            });
+        }
+        else{
+            $(row).find('#select_qty').val(1)
+            frappe.throw("Selected quantity should not be 0 or less..")
+        }
+    })
+}
+
+// add classes and make fields readonly
+format_fields = function(di){
+    $(di.body).find("button[data-fieldname='pack_items']").css({"margin-left":"220px" ,"background-color": "#CED0D2", "border-radius": "8px", "width":"100px", "line-height": "1.7", "font-size":"15px"})
+
+    // make fields readonly
+    $(di.body).find("[data-fieldname='weight']").prop("readonly", true);
+    $(di.body).find("[data-fieldname='tot_items']").prop("readonly", true);
+    $(di.body).find("[data-fieldname='tot_wt']").prop("readonly", true);
+}
+
 frappe.ui.form.on("Delivery Note", "onload_post_render", function(doc, cdt, cdn) {
     var get_other_services = $(":button[data-fieldname='fetch_ups_ground_rates']");
     var get_bin_details = $(":button[data-fieldname='get_packing_details']");
     var get_ground_rates = $(":button[data-fieldname='get_ups_rates']");
+    var pack_manualy = $(":button[data-fieldname='manual_packing']");
     // setting up the class
     get_bin_details.addClass("btn-primary");
     get_ground_rates.addClass("btn-primary");
     get_other_services.addClass("btn-primary");
+    pack_manualy.addClass("btn-primary");
 
     if(cur_frm.doc.docstatus == 1 && cur_frm.doc.is_manual_shipping)
         cur_frm.get_field("packing_slip_details").grid.docfields[7].read_only = 0; // setting the tracking status field to editable
@@ -134,6 +471,11 @@ frappe.ui.form.on("Delivery Note Item", "item_code", function(doc, cdt, cdn) {
 });
 
 frappe.ui.form.on("Delivery Note", "onload", function(doc, cdt, cdn) {
+    if (cur_frm.doc.dn_status=="Draft" || cur_frm.doc.dn_status=="Manual Partialy Packed" || cur_frm.doc.dn_status=="Manual Packing Slips Created"){
+        if (cur_frm.doc.pack_manualy == 1){
+            cur_frm.set_df_property("pack_manualy","read_only", 1)
+        }
+    }
   var doc = locals[cdt][cdn];
   var items = doc.items;
   if(items){
